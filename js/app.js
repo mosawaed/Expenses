@@ -11,7 +11,7 @@ import {
 } from './ui.js';
 import { attachSwipe } from './swipe.js';
 import {
-  createMonthlyBars, createSpendingLine, createMethodSplit, dailySpendingData, monthlySpendingData,
+  createMonthlyBars, createSpendingLine, createMethodSplit, dailySpendingData, monthlySpendingData, createCategoryBreakdown,
 } from './charts.js';
 import { APP_VERSION, BUILD } from './version.js';
 
@@ -36,6 +36,7 @@ const state = {
   waitingWorker: null,
   sheetPresented: false,
   showFinishedPlans: false,
+  activityCategory: 'all', // category filter on Activity
 };
 
 let ui = readUi();
@@ -199,6 +200,7 @@ function txRow(tx, { showDate = false } = {}) {
   const isIncome = tx.type === 'income';
   const title = tx.note || (isIncome ? 'Income' : 'Expense');
   const signed = money(isIncome ? value : -value, { sign: true });
+  const category = isIncome ? null : store.categoryOf(tx);
   return h('li', { class: `tx-row${tx.id === state.flashId ? ' is-new' : ''}`, dataset: { id: tx.id } },
     h('div', { class: 'tx-actions', 'aria-hidden': 'true' },
       h('button', { type: 'button', class: 'tx-delete', tabindex: '-1' }, icon('trash'), h('span', null, 'Delete'))),
@@ -206,14 +208,16 @@ function txRow(tx, { showDate = false } = {}) {
       class: 'tx-content',
       role: 'button',
       tabindex: '0',
-      'aria-label': `${title}, ${isIncome ? 'income' : 'expense'} ${signed}, ${METHOD_LABEL[tx.method]}, ${dayHeading(tx.date)}. Opens the editor.`,
+      'aria-label': `${title}, ${isIncome ? 'income' : `expense, ${category.name}`} ${signed}, ${METHOD_LABEL[tx.method]}, ${dayHeading(tx.date)}. Opens the editor.`,
     },
-    h('span', { class: `tx-icon is-${tx.type}`, 'aria-hidden': 'true' }, icon(isIncome ? 'income' : 'expense')),
+    isIncome
+      ? h('span', { class: 'tx-icon is-income', 'aria-hidden': 'true' }, icon('income'))
+      : categoryBubble(category, 'tx-icon'),
     h('span', { class: 'tx-main' },
       h('span', { class: 'tx-title', dir: 'auto' }, title),
       h('span', { class: 'tx-sub' },
         icon(tx.method, 'tx-method-icon'),
-        METHOD_LABEL[tx.method],
+        isIncome ? METHOD_LABEL[tx.method] : `${category.name} · ${METHOD_LABEL[tx.method]}`,
         showDate ? ` · ${dayHeading(tx.date)}` : '')),
     h('span', { class: `tx-amount is-${tx.type}` }, signed)));
 }
@@ -230,15 +234,24 @@ function paymentRow(tx, { showDate = false } = {}) {
       tabindex: '0',
       'aria-label': `${title}, installment payment ${tx.payment} of ${tx.payments}, ${money(-value, { sign: true })}, ${METHOD_LABEL[tx.method]}, ${dayHeading(tx.date)}${upcoming ? ', upcoming' : ''}. Opens the installment plan.`,
     },
-    h('span', { class: 'tx-icon is-expense', 'aria-hidden': 'true' }, icon('installments')),
+    categoryBubble(store.categoryOf(tx), 'tx-icon'),
     h('span', { class: 'tx-main' },
       h('span', { class: 'tx-title', dir: 'auto' }, title),
       h('span', { class: 'tx-sub' },
-        icon(tx.method, 'tx-method-icon'),
-        `${METHOD_LABEL[tx.method]} · Payment ${tx.payment} of ${tx.payments}`,
+        icon('installments', 'tx-method-icon'),
+        `${store.categoryOf(tx).name} · Payment ${tx.payment} of ${tx.payments}`,
         showDate ? ` · ${dayHeading(tx.date)}` : '',
         upcoming ? h('span', { class: 'tx-badge' }, 'Upcoming') : null)),
     h('span', { class: 'tx-amount is-expense' }, money(-value, { sign: true }))));
+}
+
+/** A round icon in the category's color. */
+function categoryBubble(category, className = '') {
+  return h('span', {
+    class: `cat-bubble ${className}`.trim(),
+    style: { '--cat': `var(--cat-${category.color})` },
+    'aria-hidden': 'true',
+  }, icon(category.icon));
 }
 
 function openFromRow(id) {
@@ -350,8 +363,9 @@ function getFilterBar(scope) {
     value: state.filter.method,
     onChange: (value) => setFilter({ method: value }),
   });
-  document.getElementById(`${scope}-filters`).replaceChildren(h('div', { class: 'filter-row' }, stepper.el, method.el));
-  filterBars[scope] = { stepper, method };
+  const categories = scope === 'activity' ? h('div', { class: 'cat-filter', role: 'group', 'aria-label': 'Category' }) : null;
+  document.getElementById(`${scope}-filters`).replaceChildren(...[h('div', { class: 'filter-row' }, stepper.el, method.el), categories].filter(Boolean));
+  filterBars[scope] = { stepper, method, categories };
   return filterBars[scope];
 }
 
@@ -359,6 +373,34 @@ function syncFilterBar(scope) {
   const bar = getFilterBar(scope);
   bar.stepper.set(state.filter.month);
   bar.method.set(state.filter.method);
+  if (bar.categories) syncCategoryFilter(bar.categories);
+}
+
+function syncCategoryFilter(root) {
+  const categories = store.getCategories();
+  if (state.activityCategory !== 'all' && !categories.some((c) => c.id === state.activityCategory)) state.activityCategory = 'all';
+  const chip = (value, label, category) => {
+    const selected = state.activityCategory === value;
+    return h('button', {
+      type: 'button',
+      class: `cat-chip${selected ? ' is-on' : ''}`,
+      style: category ? { '--cat': `var(--cat-${category.color})` } : undefined,
+      'aria-pressed': String(selected),
+      onClick: () => {
+        state.activityCategory = value;
+        state.activityLimit = PAGE_SIZE;
+        markDirty('activity');
+        render();
+      },
+    }, category ? icon(category.icon) : null, h('span', { dir: 'auto' }, label));
+  };
+  const scroller = root.querySelector('.cat-filter-scroll');
+  const left = scroller ? scroller.scrollLeft : 0;
+  const next = h('div', { class: 'cat-filter-scroll' },
+    chip('all', 'All categories'),
+    categories.map((c) => chip(c.id, c.name, c)));
+  root.replaceChildren(next);
+  next.scrollLeft = left;
 }
 
 function setFilter(patch) {
@@ -694,7 +736,7 @@ let loadMoreObserver = null;
 function renderActivity() {
   syncFilterBar('activity');
   const all = store.getAll();
-  const list = store.filterTransactions(all, state.filter);
+  const list = store.filterTransactions(all, { ...state.filter, category: state.activityCategory });
   const summary = document.getElementById('activity-summary');
   const root = document.getElementById('activity-list');
   loadMoreObserver?.disconnect();
@@ -720,8 +762,20 @@ function renderActivity() {
       actions.push(h('button', { type: 'button', class: 'btn btn-small btn-tinted', onClick: () => setFilter({ method: 'all' }) }, 'Show cash and card'));
     }
     const where = state.filter.month === 'all' ? '' : ` in ${monthName(state.filter.month)}`;
+    if (state.activityCategory !== 'all') {
+      actions.push(h('button', {
+        type: 'button',
+        class: 'btn btn-small btn-tinted',
+        onClick: () => {
+          state.activityCategory = 'all';
+          markDirty('activity');
+          render();
+        },
+      }, 'All categories'));
+    }
     const how = state.filter.method === 'all' ? '' : ` paid by ${state.filter.method}`;
-    root.replaceChildren(emptyState({ title: 'Nothing here', text: `No transactions${how}${where}.`, actions }));
+    const what = state.activityCategory === 'all' ? 'transactions' : `${store.getCategory(state.activityCategory).name} expenses`;
+    root.replaceChildren(emptyState({ title: 'Nothing here', text: `No ${what}${how}${where}.`, actions }));
     return;
   }
 
@@ -807,11 +861,14 @@ function ensureCharts() {
   const bars = createMonthlyBars();
   const line = createSpendingLine();
   const split = createMethodSplit();
+  const categories = createCategoryBreakdown({ onSelect: showCategoryTransactions, renderIcon: (name) => icon(name) });
   charts = {
     bars, line, split,
     barsCard: chartCard('Income vs expenses', bars),
     lineCard: chartCard('Spending over time', line),
     splitCard: chartCard('Cash vs card', split),
+    categories,
+    categoriesCard: chartCard('Spending by category', categories),
   };
   return charts;
 }
@@ -830,7 +887,7 @@ function renderInsights() {
   }
   const c = ensureCharts();
   if (!c.barsCard.card.isConnected) {
-    root.replaceChildren(c.barsCard.card, c.lineCard.card, c.splitCard.card,
+    root.replaceChildren(c.barsCard.card, c.categoriesCard.card, c.lineCard.card, c.splitCard.card,
       h('p', { class: 'footnote' }, 'Tap or drag on a chart to see exact numbers. The table button shows every value.'));
   }
 
@@ -866,6 +923,12 @@ function renderInsights() {
     c.lineCard.subtitle.textContent = `${monthName(month)}, compared with ${monthName(prevKey, 'name')}${methodNote}`;
   }
 
+  // Spending by category (follows the month and cash/card filters)
+  const periodLabel = month === 'all' ? 'All months' : monthName(month);
+  const periodList = month === 'all' ? list : store.filterTransactions(list, { month });
+  c.categories.update({ rows: store.categoryBreakdown(periodList), periodLabel });
+  c.categoriesCard.subtitle.textContent = `${periodLabel}${methodNote} · tap a category to see its expenses`;
+
   // 3. Cash vs card (always both methods)
   const period = month === 'all' ? all : store.filterTransactions(all, { month });
   const s = store.summarize(period);
@@ -880,6 +943,15 @@ function renderInsights() {
 }
 
 const maxMonth = (a, b) => (a > b ? a : b);
+
+/** Opens Activity filtered to one category, for the month being viewed. */
+function showCategoryTransactions(categoryId) {
+  state.activityCategory = categoryId;
+  state.activityLimit = PAGE_SIZE;
+  markDirty('activity');
+  switchView('activity');
+  viewEl('activity').scrollTo({ top: 0 });
+}
 
 function rangeLabel(keys) {
   const first = keys[0];
@@ -940,6 +1012,17 @@ function renderSettings() {
         onClick: () => document.getElementById('import-file').click(),
       }),
     ], 'A backup is one small .json file. Save it to iCloud Drive or Files. Import it to restore your data, for example on a new phone.'),
+    settingsGroup('Categories', [
+      ...store.getCategories().map((c) => h('button', {
+        type: 'button',
+        class: 'list-row list-row-button',
+        onClick: () => openCategoryEditor(c.id),
+      },
+      categoryBubble(c, 'row-icon cat-row-icon'),
+      h('span', { class: 'row-text' }, h('span', { class: 'row-title', dir: 'auto' }, c.name)),
+      icon('chevronRight', 'row-chevron'))),
+      rowButton({ iconName: 'plus', tint: 'accent', title: 'Add category', onClick: () => openCategoryEditor(null) }),
+    ], 'Tap a category to rename it or change its color and icon. Expenses without a category, or from a deleted one, count as Other.'),
     settingsGroup('Your data', [
       infoRow({ iconName: 'shield', tint: 'green', title: 'Stored on this device only', value: dataDescription(store.snapshot()) }),
       rowButton({ iconName: 'trash', tint: 'danger', title: 'Delete all data', destructive: true, disabled: !hasData(store.snapshot()), onClick: deleteAll }),
@@ -1047,6 +1130,7 @@ function openEditor(id = null, { planId = null } = {}) {
     type: existing ? existing.type : 'expense',
     method: plan ? plan.method : existing ? existing.method : ui.lastMethod === 'cash' ? 'cash' : 'card',
     installments: Boolean(plan),
+    category: plan ? store.getCategory(plan.category).id : existing && existing.type === 'expense' ? store.categoryOf(existing).id : store.OTHER,
   };
   const titleId = 'editor-title';
 
@@ -1102,6 +1186,35 @@ function openEditor(id = null, { planId = null } = {}) {
     value: draft.method,
     onChange: (value) => { draft.method = value; },
   });
+
+  // Category (expenses only).
+  const categoryLabel = h('div', { class: 'field-label' }, 'Category');
+  const categoryPicker = h('div', { class: 'cat-picker', role: 'radiogroup', 'aria-label': 'Category' });
+  function renderCategoryPicker() {
+    const categories = store.getCategories();
+    if (!categories.some((c) => c.id === draft.category)) draft.category = store.OTHER;
+    categoryPicker.replaceChildren(
+      ...categories.map((c) => h('button', {
+        type: 'button',
+        class: `cat-chip${c.id === draft.category ? ' is-on' : ''}`,
+        role: 'radio',
+        'aria-checked': String(c.id === draft.category),
+        style: { '--cat': `var(--cat-${c.color})` },
+        onClick: () => {
+          draft.category = c.id;
+          renderCategoryPicker();
+        },
+      }, icon(c.icon), h('span', { dir: 'auto' }, c.name))),
+      h('button', {
+        type: 'button',
+        class: 'cat-chip cat-chip-new',
+        onClick: () => openCategoryEditor(null, (created) => {
+          draft.category = created.id;
+          renderCategoryPicker();
+        }),
+      }, icon('plus'), h('span', null, 'New')));
+  }
+  renderCategoryPicker();
 
   // Installments: a switch, the number of monthly payments, and a preview.
   const planSwitch = h('input', { type: 'checkbox', class: 'switch', id: 'tx-installments', role: 'switch' });
@@ -1189,6 +1302,8 @@ function openEditor(id = null, { planId = null } = {}) {
       amountError,
       h('div', { class: 'field-label', id: 'method-label' }, 'Paid with'),
       methodControl.el,
+      categoryLabel,
+      categoryPicker,
       h('div', { class: 'list-card form-card' },
         switchRow,
         countRow,
@@ -1221,6 +1336,8 @@ function openEditor(id = null, { planId = null } = {}) {
   function syncPlanUi() {
     const on = planMode();
     switchRow.hidden = !isNew || draft.type !== 'expense';
+    categoryLabel.hidden = draft.type !== 'expense';
+    categoryPicker.hidden = draft.type !== 'expense';
     countRow.hidden = !on;
     countChipsRow.hidden = !on;
     amountCaption.hidden = !on;
@@ -1322,7 +1439,7 @@ function openEditor(id = null, { planId = null } = {}) {
     let message;
     try {
       if (inPlan) {
-        const payload = { total: amount, count, firstDate: dateInput.value, method: draft.method, note: noteInput.value };
+        const payload = { total: amount, count, firstDate: dateInput.value, method: draft.method, note: noteInput.value, category: draft.category };
         if (plan) {
           store.updatePlan(plan.id, payload);
           message = 'Installment plan saved';
@@ -1335,6 +1452,8 @@ function openEditor(id = null, { planId = null } = {}) {
         }
       } else {
         const payload = { type: draft.type, method: draft.method, amount, date: dateInput.value, note: noteInput.value };
+        if (draft.type === 'expense') payload.category = draft.category;
+        else delete payload.category;
         if (isNew) {
           const tx = store.addTransaction(payload);
           state.flashId = tx.id;
@@ -1374,6 +1493,145 @@ function openEditor(id = null, { planId = null } = {}) {
       setTimeout(focusAmount, 520);
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// Category editor
+// ---------------------------------------------------------------------------
+
+function openCategoryEditor(id, onSaved) {
+  const existing = id ? store.getCategories().find((c) => c.id === id) : null;
+  if (id && !existing) return;
+  const draft = {
+    color: existing ? existing.color : store.CATEGORY_COLORS.find((col) => !store.getCategories().some((c) => c.color === col)) || 'blue',
+    icon: existing ? existing.icon : 'other',
+  };
+  const titleId = 'category-title';
+  const cancelButton = h('button', { type: 'button', class: 'nav-btn' }, 'Cancel');
+  const saveButton = h('button', { type: 'submit', class: 'nav-btn nav-btn-strong' }, existing ? 'Save' : 'Add');
+  const preview = h('div', { class: 'cat-preview' });
+  const nameInput = h('input', {
+    type: 'text',
+    class: 'field-input',
+    id: 'cat-name',
+    maxlength: String(store.CATEGORY_NAME_MAX),
+    placeholder: 'For example: Transport',
+    autocomplete: 'off',
+    enterkeyhint: 'done',
+    dir: 'auto',
+  });
+  nameInput.value = existing ? existing.name : '';
+  const error = h('p', { class: 'field-error', 'aria-live': 'polite' });
+  const colors = h('div', { class: 'swatches', role: 'radiogroup', 'aria-label': 'Color' });
+  const icons = h('div', { class: 'icon-grid', role: 'radiogroup', 'aria-label': 'Icon' });
+
+  function paint() {
+    const name = nameInput.value.trim();
+    preview.replaceChildren(
+      categoryBubble({ color: draft.color, icon: draft.icon }, 'cat-bubble-lg'),
+      h('span', { class: 'cat-preview-name', dir: 'auto' }, name || 'New category'));
+    colors.replaceChildren(...store.CATEGORY_COLORS.map((color) => h('button', {
+      type: 'button',
+      class: `swatch${color === draft.color ? ' is-on' : ''}`,
+      role: 'radio',
+      'aria-checked': String(color === draft.color),
+      'aria-label': color,
+      style: { '--cat': `var(--cat-${color})` },
+      onClick: () => { draft.color = color; paint(); },
+    }, color === draft.color ? icon('check') : null)));
+    icons.replaceChildren(...store.CATEGORY_ICONS.map((name2) => h('button', {
+      type: 'button',
+      class: `icon-choice${name2 === draft.icon ? ' is-on' : ''}`,
+      role: 'radio',
+      'aria-checked': String(name2 === draft.icon),
+      'aria-label': `${name2} icon`,
+      style: { '--cat': `var(--cat-${draft.color})` },
+      onClick: () => { draft.icon = name2; paint(); },
+    }, icon(name2))));
+    saveButton.disabled = !name;
+  }
+  nameInput.addEventListener('input', () => { error.textContent = ''; paint(); });
+
+  const form = h('form', { class: 'editor', novalidate: true, 'aria-labelledby': titleId },
+    h('header', { class: 'sheet-header', 'data-drag-handle': '' },
+      cancelButton,
+      h('h2', { class: 'sheet-title', id: titleId }, existing ? 'Edit category' : 'New category'),
+      saveButton),
+    h('div', { class: 'sheet-body' },
+      preview,
+      h('div', { class: 'list-card form-card' },
+        h('div', { class: 'form-row' },
+          h('label', { class: 'form-label', for: 'cat-name' }, icon('tag'), 'Name'),
+          nameInput)),
+      error,
+      h('div', { class: 'field-label' }, 'Color'),
+      colors,
+      h('div', { class: 'field-label' }, 'Icon'),
+      icons,
+      existing && existing.id !== store.OTHER
+        ? h('button', {
+          type: 'button',
+          class: 'btn btn-destructive',
+          onClick: () => {
+            layer.close();
+            deleteCategoryWithUndo(existing.id);
+          },
+        }, icon('trash'), 'Delete category')
+        : null,
+      existing && existing.id === store.OTHER
+        ? h('p', { class: 'plan-preview' }, 'Other can’t be deleted: it holds expenses without a category.')
+        : null));
+
+  form.addEventListener('submit', (event) => {
+    event.preventDefault();
+    const name = nameInput.value.trim();
+    if (!name) return;
+    if (store.isCategoryNameTaken(name, existing ? existing.id : null)) {
+      error.textContent = 'You already have a category with that name.';
+      shake(nameInput.closest('.form-row'));
+      return;
+    }
+    let saved;
+    try {
+      saved = existing
+        ? store.updateCategory(existing.id, { name, color: draft.color, icon: draft.icon })
+        : store.addCategory({ name, color: draft.color, icon: draft.icon });
+    } catch (err) {
+      showError(err);
+      return;
+    }
+    layer.close();
+    haptic();
+    toast(existing ? 'Category saved' : `Category “${saved.name}” added`, { iconName: 'check', duration: 2500 });
+    if (onSaved) onSaved(saved);
+  });
+  cancelButton.addEventListener('click', () => layer.close());
+  paint();
+  const layer = openLayer({ kind: 'page', content: form, labelledBy: titleId, initialFocus: existing ? undefined : nameInput });
+}
+
+function deleteCategoryWithUndo(id) {
+  let removed;
+  try {
+    removed = store.deleteCategory(id);
+  } catch (err) {
+    showError(err);
+    return;
+  }
+  if (!removed) return;
+  haptic();
+  toast(`“${removed.category.name}” deleted · its expenses now count as Other`, {
+    iconName: 'trash',
+    actionLabel: 'Undo',
+    duration: 6000,
+    onAction: () => {
+      try {
+        store.restoreCategory(removed);
+      } catch (err) {
+        showError(err);
+      }
+    },
+  });
 }
 
 function shake(el) {
@@ -1534,9 +1792,15 @@ function setupImport() {
     try {
       if (mode === 'replace') {
         // Backups made before installments existed have no plans: keep the ones on this phone.
-        store.restoreSnapshot({ transactions: parsed.transactions, plans: parsed.hasPlans ? parsed.plans : before.plans });
+        store.restoreSnapshot({
+          transactions: parsed.transactions,
+          plans: parsed.hasPlans ? parsed.plans : before.plans,
+          // Older backups have no categories: keep the ones on this phone.
+          categories: parsed.hasCategories ? parsed.categories : undefined,
+        });
         message = `Restored ${count}`;
       } else {
+        store.mergeCategories(parsed.categories);
         const tx = store.mergeTransactions(parsed.transactions);
         const plans = store.mergePlans(parsed.plans);
         const added = [];

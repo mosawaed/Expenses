@@ -14,7 +14,11 @@ data only on your phone.
 - **Monthly summary**: how much came in, how much you spent, and how much is left.
 - **All transactions**: grouped by day. Tap one to edit it. Swipe left to delete it, with
   **Undo** in case you slip.
-- **Filters**: choose a month (or all months) and All / Cash / Card.
+- **Categories**: every expense (including installment plans) gets a category: Food, Study,
+  Impulse buys, Essentials or Other. Add, rename or delete your own, each with its own color
+  and icon, in **Settings → Categories**. Older expenses without a category count as Other
+  until you edit them.
+- **Filters**: choose a month (or all months), All / Cash / Card, and a category.
 - **Installments**: when adding an expense, turn on **Pay in installments** and enter the
   total, the number of monthly payments, the first payment date, and cash or card. Each
   payment counts as an expense in its own month, and the balance only drops when a payment
@@ -23,6 +27,8 @@ data only on your phone.
   to edit or delete it.
 - **Charts**: income vs expenses per month, spending over time, and cash vs card.
   Tap or drag on a chart to see exact numbers; the table button lists every value.
+  **Spending by category** shows each category's amount and share for the month. Tap one to
+  see its expenses.
 - **Backup**: export all your data to a file, and import it again to restore.
 - **Light and dark mode**: follows your iPhone, or pick one in Settings.
 
@@ -81,7 +87,7 @@ The address is also shown under **Settings → Pages** once the first deploy has
 
 ## Your data and backups
 
-- Your transactions and installment plans are saved **only on your phone**, inside the app's storage. Nothing is
+- Your transactions, installment plans and categories are saved **only on your phone**, inside the app's storage. Nothing is
   uploaded anywhere. The GitHub repository contains only the app's code, never your numbers,
   so it's fine that it's public.
 - **Make a backup now and then.** If you remove the app from your Home Screen, its data is
