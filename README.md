@@ -15,6 +15,12 @@ data only on your phone.
 - **All transactions**: grouped by day. Tap one to edit it. Swipe left to delete it, with
   **Undo** in case you slip.
 - **Filters**: choose a month (or all months) and All / Cash / Card.
+- **Installments**: when adding an expense, turn on **Pay in installments** and enter the
+  total, the number of monthly payments, the first payment date, and cash or card. Each
+  payment counts as an expense in its own month, and the balance only drops when a payment
+  is due. Under **Installments** on the Overview screen you'll see what's left to pay, what's
+  due this month and next month, and every active plan. Tap a plan (or one of its payments)
+  to edit or delete it.
 - **Charts**: income vs expenses per month, spending over time, and cash vs card.
   Tap or drag on a chart to see exact numbers; the table button lists every value.
 - **Backup**: export all your data to a file, and import it again to restore.
@@ -75,7 +81,7 @@ The address is also shown under **Settings → Pages** once the first deploy has
 
 ## Your data and backups
 
-- Your transactions are saved **only on your phone**, inside the app's storage. Nothing is
+- Your transactions and installment plans are saved **only on your phone**, inside the app's storage. Nothing is
   uploaded anywhere. The GitHub repository contains only the app's code, never your numbers,
   so it's fine that it's public.
 - **Make a backup now and then.** If you remove the app from your Home Screen, its data is
