@@ -67,7 +67,7 @@ export function attachSwipe(container, { onDelete, onOpen }) {
     const content = event.target.closest('.tx-content');
     if (!content || !container.contains(content)) return;
     const row = content.closest('.tx-row');
-    if (row.classList.contains('is-removing')) return;
+    if (row.classList.contains('is-removing') || row.dataset.plan) return; // installment payments are managed from their plan
     const base = row === openRow ? -ACTION_WIDTH : 0;
     drag = {
       row,
@@ -162,7 +162,7 @@ export function attachSwipe(container, { onDelete, onOpen }) {
     if (event.key === 'Enter' || event.key === ' ') {
       event.preventDefault();
       onOpen(row.dataset.id);
-    } else if (event.key === 'Delete' || event.key === 'Backspace') {
+    } else if ((event.key === 'Delete' || event.key === 'Backspace') && !row.dataset.plan) {
       event.preventDefault();
       removeRow(row, onDelete);
     }

@@ -3,7 +3,7 @@ import { h, icon, prefersReducedMotion } from './dom.js';
 import {
   money, moneyParts, toAgorot, parseAmount, percent, plural, MINUS,
   todayKey, shiftDate, isDateKey, currentMonth, shiftMonth, monthName, monthRange,
-  dayHeading, longDate, relativeTime, dateTime,
+  dayHeading, longDate, relativeTime, dateTime, shortDate,
 } from './format.js';
 import {
   openLayer, actionSheet, alertDialog, toast, segmented, haptic, isIOS,
@@ -35,6 +35,7 @@ const state = {
   installPrompt: null,
   waitingWorker: null,
   sheetPresented: false,
+  showFinishedPlans: false,
 };
 
 let ui = readUi();
@@ -51,8 +52,8 @@ function init() {
   setupKeyboardInset();
   setupImport();
   document.getElementById('quick-add').addEventListener('click', () => openEditor());
-  attachSwipe(document.getElementById('home-recent'), { onDelete: deleteWithUndo, onOpen: openEditor });
-  attachSwipe(document.getElementById('activity-list'), { onDelete: deleteWithUndo, onOpen: openEditor });
+  attachSwipe(document.getElementById('home-recent'), { onDelete: deleteWithUndo, onOpen: openFromRow });
+  attachSwipe(document.getElementById('activity-list'), { onDelete: deleteWithUndo, onOpen: openFromRow });
   store.subscribe(() => {
     markDirty(...VIEWS);
     render();
@@ -193,6 +194,7 @@ function setupKeyboardInset() {
 // ---------------------------------------------------------------------------
 
 function txRow(tx, { showDate = false } = {}) {
+  if (tx.planId) return paymentRow(tx, { showDate });
   const value = toAgorot(tx.amount);
   const isIncome = tx.type === 'income';
   const title = tx.note || (isIncome ? 'Income' : 'Expense');
@@ -214,6 +216,35 @@ function txRow(tx, { showDate = false } = {}) {
         METHOD_LABEL[tx.method],
         showDate ? ` · ${dayHeading(tx.date)}` : '')),
     h('span', { class: `tx-amount is-${tx.type}` }, signed)));
+}
+
+/** One monthly payment of an installment plan. Tapping it opens the plan; it can't be swiped away on its own. */
+function paymentRow(tx, { showDate = false } = {}) {
+  const value = toAgorot(tx.amount);
+  const title = tx.note || 'Installment';
+  const upcoming = store.isUpcomingPayment(tx);
+  return h('li', { class: `tx-row is-payment${upcoming ? ' is-upcoming' : ''}${tx.planId === state.flashId ? ' is-new' : ''}`, dataset: { id: tx.id, plan: tx.planId } },
+    h('div', {
+      class: 'tx-content',
+      role: 'button',
+      tabindex: '0',
+      'aria-label': `${title}, installment payment ${tx.payment} of ${tx.payments}, ${money(-value, { sign: true })}, ${METHOD_LABEL[tx.method]}, ${dayHeading(tx.date)}${upcoming ? ', upcoming' : ''}. Opens the installment plan.`,
+    },
+    h('span', { class: 'tx-icon is-expense', 'aria-hidden': 'true' }, icon('installments')),
+    h('span', { class: 'tx-main' },
+      h('span', { class: 'tx-title', dir: 'auto' }, title),
+      h('span', { class: 'tx-sub' },
+        icon(tx.method, 'tx-method-icon'),
+        `${METHOD_LABEL[tx.method]} · Payment ${tx.payment} of ${tx.payments}`,
+        showDate ? ` · ${dayHeading(tx.date)}` : '',
+        upcoming ? h('span', { class: 'tx-badge' }, 'Upcoming') : null)),
+    h('span', { class: 'tx-amount is-expense' }, money(-value, { sign: true }))));
+}
+
+function openFromRow(id) {
+  const planId = id.includes(':') ? id.split(':')[0] : null;
+  if (planId) openPlanEditor(planId);
+  else openEditor(id);
 }
 
 function emptyState({ title, text, actions = [] }) {
@@ -345,10 +376,13 @@ let homeStepper = null;
 
 function renderHome() {
   const all = store.getAll();
-  const totals = store.summarize(all);
-  document.getElementById('today-label').textContent = longDate(todayKey());
+  const today = todayKey();
+  // Installment payments that aren't due yet are owed, not spent: keep them out of the balance.
+  const settled = all.filter((t) => !store.isUpcomingPayment(t, today));
+  const totals = store.summarize(settled);
+  document.getElementById('today-label').textContent = longDate(today);
   renderBalance(totals);
-  renderNotices(all);
+  renderNotices(store.getTransactions());
 
   if (!homeStepper) {
     homeStepper = createMonthStepper({
@@ -363,14 +397,108 @@ function renderHome() {
   }
   homeStepper.set(state.homeMonth);
   renderMonthSummary(all);
+  renderInstallments();
 
   const recent = document.getElementById('home-recent');
-  if (!all.length) {
+  if (!settled.length) {
     recent.replaceChildren(noDataYet());
   } else {
-    recent.replaceChildren(h('ul', { class: 'list-card' }, all.slice(0, 5).map((tx) => txRow(tx, { showDate: true }))));
+    recent.replaceChildren(h('ul', { class: 'list-card' }, settled.slice(0, 5).map((tx) => txRow(tx, { showDate: true }))));
   }
   document.querySelector('#view-home [data-goto="activity"]').hidden = !all.length;
+}
+
+// ---------- Installment plans (Home) ----------
+
+function renderInstallments() {
+  const root = document.getElementById('home-installments');
+  if (!store.getPlans().length) {
+    root.replaceChildren(h('div', { class: 'card plans-empty' },
+      h('span', { class: 'notice-icon', 'aria-hidden': 'true' }, icon('installments')),
+      h('p', { class: 'notice-text' },
+        'Bought something in monthly payments? When you add an expense, turn on ',
+        h('strong', null, 'Pay in installments'), '. Each payment then counts in its own month.')));
+    return;
+  }
+  const o = store.installmentOverview();
+  const blocks = [
+    h('div', { class: 'card stat-strip plans-strip' },
+      stripStat('Left to pay', money(o.owed)),
+      stripStat(`Due in ${monthName(o.thisMonth, 'short')}`, money(o.dueThisMonth)),
+      stripStat(`Due in ${monthName(o.nextMonth, 'short')}`, money(o.dueNextMonth))),
+  ];
+  if (o.active.length) {
+    blocks.push(h('ul', { class: 'list-card plan-list' }, o.active.map(planRow)));
+  } else {
+    blocks.push(h('p', { class: 'plans-note' }, 'All your plans are paid off.'));
+  }
+  if (o.finished.length) {
+    blocks.push(h('button', {
+      type: 'button',
+      class: 'link-btn plans-toggle',
+      'aria-expanded': String(state.showFinishedPlans),
+      onClick: () => {
+        state.showFinishedPlans = !state.showFinishedPlans;
+        markDirty('home');
+        render();
+      },
+    }, `${state.showFinishedPlans ? 'Hide' : 'Show'} paid-off plans (${o.finished.length})`));
+    if (state.showFinishedPlans) blocks.push(h('ul', { class: 'list-card plan-list' }, o.finished.map(planRow)));
+  }
+  root.replaceChildren(...blocks);
+}
+
+function planRow(s) {
+  const { plan } = s;
+  const title = plan.note || 'Installment plan';
+  const done = s.leftCount === 0;
+  const sub = done
+    ? `Paid off · ${plan.count} payments`
+    : `${money(s.monthly)}/month · ${s.leftCount} of ${plan.count} left`;
+  return h('li', { class: `plan-row${plan.id === state.flashId ? ' is-new' : ''}` },
+    h('button', {
+      type: 'button',
+      class: 'plan-content',
+      'aria-label': `${title}: ${sub}, ${money(s.leftAmount)} left to pay. Opens the plan.`,
+      onClick: () => openPlanEditor(plan.id),
+    },
+    h('span', { class: 'tx-icon is-expense', 'aria-hidden': 'true' }, icon('installments')),
+    h('span', { class: 'tx-main' },
+      h('span', { class: 'tx-title', dir: 'auto' }, title),
+      h('span', { class: 'tx-sub' }, icon(plan.method, 'tx-method-icon'), sub),
+      h('span', { class: 'plan-progress', 'aria-hidden': 'true' },
+        h('span', { class: 'plan-progress-fill', style: { '--fill': (s.paidCount / plan.count).toFixed(4) } }))),
+    h('span', { class: 'plan-amount' },
+      h('span', { class: 'plan-left' }, money(s.leftAmount)),
+      h('span', { class: 'plan-left-label' }, done ? 'done' : 'left')),
+    icon('chevronRight', 'row-chevron')));
+}
+
+function openPlanEditor(planId) {
+  openEditor(null, { planId });
+}
+
+function deletePlanWithUndo(id) {
+  let plan;
+  try {
+    plan = store.deletePlan(id);
+  } catch (err) {
+    showError(err);
+    return;
+  }
+  if (!plan) return;
+  haptic();
+  toast('Installment plan deleted', {
+    iconName: 'trash',
+    actionLabel: 'Undo',
+    onAction: () => {
+      try {
+        store.restorePlan(plan);
+      } catch (err) {
+        showError(err);
+      }
+    },
+  });
 }
 
 function renderBalance(totals) {
@@ -768,7 +896,6 @@ function rangeLabel(keys) {
 let themeControl = null;
 
 function renderSettings() {
-  const all = store.getAll();
   const meta = store.getMeta();
   if (!themeControl) {
     themeControl = segmented({
@@ -814,8 +941,8 @@ function renderSettings() {
       }),
     ], 'A backup is one small .json file. Save it to iCloud Drive or Files. Import it to restore your data, for example on a new phone.'),
     settingsGroup('Your data', [
-      infoRow({ iconName: 'shield', tint: 'green', title: 'Stored on this device only', value: plural(all.length, 'transaction') }),
-      rowButton({ iconName: 'trash', tint: 'danger', title: 'Delete all data', destructive: true, disabled: !all.length, onClick: deleteAll }),
+      infoRow({ iconName: 'shield', tint: 'green', title: 'Stored on this device only', value: dataDescription(store.snapshot()) }),
+      rowButton({ iconName: 'trash', tint: 'danger', title: 'Delete all data', destructive: true, disabled: !hasData(store.snapshot()), onClick: deleteAll }),
     ], 'Nothing is uploaded anywhere. Removing the app from your Home Screen also removes its data, so export a backup first.'),
   );
 
@@ -908,15 +1035,18 @@ function syncThemeColor() {
 // Add / edit sheet
 // ---------------------------------------------------------------------------
 
-function openEditor(id = null) {
+function openEditor(id = null, { planId = null } = {}) {
+  const plan = planId ? store.getPlan(planId) : null;
+  if (planId && !plan) return;
   const existing = id ? store.getById(id) : null;
   if (id && !existing) return;
-  const isNew = !existing;
+  const isNew = !existing && !plan;
   if (isNew) summonKeyboard(); // must run during the tap itself
 
   const draft = {
     type: existing ? existing.type : 'expense',
-    method: existing ? existing.method : ui.lastMethod === 'cash' ? 'cash' : 'card',
+    method: plan ? plan.method : existing ? existing.method : ui.lastMethod === 'cash' ? 'cash' : 'card',
+    installments: Boolean(plan),
   };
   const titleId = 'editor-title';
 
@@ -934,9 +1064,10 @@ function openEditor(id = null) {
     onChange: (value) => {
       draft.type = value;
       form.dataset.type = value;
-      updateTitle();
+      syncPlanUi();
     },
   });
+  typeControl.el.hidden = Boolean(plan);
 
   const amountInput = h('input', {
     class: 'amount-input',
@@ -952,12 +1083,13 @@ function openEditor(id = null) {
     maxlength: '13',
     size: '1', // the field grows with its text (see .amount-wrap)
   });
-  amountInput.value = existing ? String(existing.amount) : '';
+  amountInput.value = plan ? String(plan.total) : existing ? String(existing.amount) : '';
   const sizer = h('span', { class: 'amount-sizer', 'aria-hidden': 'true' });
   const amountField = h('label', { class: 'amount-field' },
     h('span', { class: 'amount-sign', 'aria-hidden': 'true' }),
     h('span', { class: 'amount-currency', 'aria-hidden': 'true' }, '₪'),
     h('span', { class: 'amount-wrap' }, sizer, amountInput));
+  const amountCaption = h('p', { class: 'amount-caption' }, 'Total amount');
   const amountError = h('p', { class: 'field-error', id: 'amount-error', 'aria-live': 'polite' });
 
   const methodControl = segmented({
@@ -971,16 +1103,58 @@ function openEditor(id = null) {
     onChange: (value) => { draft.method = value; },
   });
 
+  // Installments: a switch, the number of monthly payments, and a preview.
+  const planSwitch = h('input', { type: 'checkbox', class: 'switch', id: 'tx-installments', role: 'switch' });
+  planSwitch.checked = draft.installments;
+  planSwitch.addEventListener('change', () => {
+    draft.installments = planSwitch.checked;
+    syncPlanUi();
+    if (planSwitch.checked) haptic();
+  });
+  const switchRow = h('div', { class: 'form-row' },
+    h('label', { class: 'form-label form-label-wide', for: 'tx-installments' }, icon('installments'), 'Pay in installments'),
+    planSwitch);
+  const countInput = h('input', {
+    type: 'text',
+    inputmode: 'numeric',
+    class: 'field-input count-input',
+    id: 'tx-count',
+    maxlength: '3',
+    autocomplete: 'off',
+    'aria-describedby': 'plan-preview',
+  });
+  countInput.value = String(plan ? plan.count : 3);
+  const countRow = h('div', { class: 'form-row' },
+    h('label', { class: 'form-label', for: 'tx-count' }, icon('table'), 'Payments'),
+    countInput,
+    h('span', { class: 'count-unit', 'aria-hidden': 'true' }, 'monthly'));
+  const countChips = h('div', { class: 'date-chips' }, [3, 6, 12, 24, 36].map((n) => {
+    const chip = h('button', { type: 'button', class: 'chip', 'aria-label': `${n} payments` }, String(n));
+    chip.dataset.count = String(n);
+    chip.addEventListener('click', () => {
+      countInput.value = String(n);
+      syncPlanUi();
+    });
+    return chip;
+  }));
+  const countChipsRow = h('div', { class: 'form-row form-row-chips' }, countChips);
+  const planPreview = h('p', { class: 'plan-preview', id: 'plan-preview', 'aria-live': 'polite' });
+  countInput.addEventListener('input', () => {
+    countInput.value = countInput.value.replace(/\D/g, '');
+    syncPlanUi();
+  });
+
   const dateInput = h('input', { type: 'date', class: 'field-input field-date', id: 'tx-date', required: true, min: '1900-01-01', max: '2200-12-31' });
-  dateInput.value = existing ? existing.date : todayKey();
+  dateInput.value = plan ? plan.firstDate : existing ? existing.date : todayKey();
+  const dateLabelText = h('span', null, 'Date');
   const chips = h('div', { class: 'date-chips' },
     dateChip('Today', () => todayKey()),
     dateChip('Yesterday', () => shiftDate(todayKey(), -1)));
   const syncChips = () => {
     chips.querySelectorAll('.chip').forEach((chip) => chip.classList.toggle('is-on', chip.dataset.date === dateInput.value));
   };
-  dateInput.addEventListener('change', syncChips);
-  dateInput.addEventListener('input', syncChips);
+  dateInput.addEventListener('change', () => { syncChips(); syncPlanUi(); });
+  dateInput.addEventListener('input', () => { syncChips(); syncPlanUi(); });
 
   const noteInput = h('input', {
     type: 'text',
@@ -993,8 +1167,15 @@ function openEditor(id = null) {
     dir: 'auto',
     list: 'note-suggestions',
   });
-  noteInput.value = existing ? existing.note : '';
+  noteInput.value = plan ? plan.note : existing ? existing.note : '';
   const suggestions = h('datalist', { id: 'note-suggestions' }, store.recentNotes().map((note) => h('option', { value: note })));
+
+  let deleteButton = null;
+  if (plan) {
+    deleteButton = h('button', { type: 'button', class: 'btn btn-destructive', onClick: () => { layer.close(); deletePlanWithUndo(plan.id); } }, icon('trash'), 'Delete plan');
+  } else if (existing) {
+    deleteButton = h('button', { type: 'button', class: 'btn btn-destructive', onClick: () => { layer.close(); deleteWithUndo(existing.id); } }, icon('trash'), 'Delete transaction');
+  }
 
   const form = h('form', { class: 'editor', novalidate: true, dataset: { type: draft.type }, 'aria-labelledby': titleId },
     h('header', { class: 'sheet-header', 'data-drag-handle': '' },
@@ -1004,21 +1185,24 @@ function openEditor(id = null) {
     h('div', { class: 'sheet-body' },
       typeControl.el,
       amountField,
+      amountCaption,
       amountError,
       h('div', { class: 'field-label', id: 'method-label' }, 'Paid with'),
       methodControl.el,
       h('div', { class: 'list-card form-card' },
+        switchRow,
+        countRow,
+        countChipsRow,
         h('div', { class: 'form-row' },
-          h('label', { class: 'form-label', for: 'tx-date' }, icon('calendar'), 'Date'),
+          h('label', { class: 'form-label', for: 'tx-date' }, icon('calendar'), dateLabelText),
           dateInput),
         h('div', { class: 'form-row form-row-chips' }, chips),
         h('div', { class: 'form-row' },
           h('label', { class: 'form-label', for: 'tx-note' }, icon('note'), 'Note'),
           noteInput)),
+      planPreview,
       suggestions,
-      existing
-        ? h('button', { type: 'button', class: 'btn btn-destructive', onClick: () => { layer.close(); deleteWithUndo(existing.id); } }, icon('trash'), 'Delete transaction')
-        : null));
+      deleteButton));
 
   function dateChip(label, getDate) {
     const chip = h('button', { type: 'button', class: 'chip' }, label);
@@ -1026,17 +1210,61 @@ function openEditor(id = null) {
     chip.addEventListener('click', () => {
       dateInput.value = getDate();
       syncChips();
+      syncPlanUi();
     });
     return chip;
   }
 
-  function updateTitle() {
+  const planMode = () => Boolean(plan) || (isNew && draft.type === 'expense' && draft.installments);
+  const paymentCount = () => Number(countInput.value);
+
+  function syncPlanUi() {
+    const on = planMode();
+    switchRow.hidden = !isNew || draft.type !== 'expense';
+    countRow.hidden = !on;
+    countChipsRow.hidden = !on;
+    amountCaption.hidden = !on;
+    planPreview.hidden = !on;
+    dateLabelText.textContent = on ? 'First payment' : 'Date';
+    form.classList.toggle('is-plan', on);
+    countChips.querySelectorAll('.chip').forEach((chip) => chip.classList.toggle('is-on', chip.dataset.count === countInput.value));
+
     const kind = draft.type === 'income' ? 'income' : 'expense';
-    form.querySelector('.sheet-title').textContent = isNew ? `New ${kind}` : `Edit ${kind}`;
+    let title = isNew ? `New ${kind}` : `Edit ${kind}`;
+    if (on) title = plan ? 'Edit installments' : 'New installment plan';
+    form.querySelector('.sheet-title').textContent = title;
+
+    if (on) {
+      const count = paymentCount();
+      const total = currentAmount();
+      if (!Number.isInteger(count) || count < 2 || count > store.MAX_PAYMENTS) {
+        planPreview.textContent = `Choose between 2 and ${store.MAX_PAYMENTS} payments.`;
+      } else if (!(total > 0)) {
+        planPreview.textContent = `${count} monthly payments. Enter the total amount above.`;
+      } else if (toAgorot(total) < count) {
+        planPreview.textContent = 'The total is too small for that many payments.';
+      } else {
+        const parts = store.splitPayments(total, count);
+        const last = isDateKey(dateInput.value) ? ` The last one is on ${shortDate(store.paymentDate(dateInput.value, count - 1))}.` : '';
+        const first = parts[0] !== parts[1] ? ` (the first is ${money(parts[0])})` : '';
+        planPreview.textContent = `${count} monthly payments of ${money(parts[1])}${first}.${last}`;
+      }
+    }
+    refreshSaveState();
   }
 
   function currentAmount() {
     return parseAmount(amountInput.value);
+  }
+
+  function refreshSaveState() {
+    const value = currentAmount();
+    let ok = value > 0;
+    if (ok && planMode()) {
+      const count = paymentCount();
+      ok = Number.isInteger(count) && count >= 2 && count <= store.MAX_PAYMENTS && toAgorot(value) >= count;
+    }
+    saveButton.disabled = !ok;
   }
 
   function refreshAmount() {
@@ -1050,10 +1278,9 @@ function openEditor(id = null) {
     cleaned = cleaned.replace(/^0+(?=\d)/, '');
     if (cleaned !== raw) amountInput.value = cleaned;
     sizer.textContent = cleaned || '0';
-    const value = currentAmount();
-    saveButton.disabled = !(value > 0);
     amountField.classList.toggle('has-value', Boolean(cleaned));
-    if (value > 0) amountError.textContent = '';
+    if (currentAmount() > 0) amountError.textContent = '';
+    syncPlanUi();
   }
   amountInput.addEventListener('input', refreshAmount);
   amountInput.addEventListener('keydown', (event) => {
@@ -1062,7 +1289,7 @@ function openEditor(id = null) {
       noteInput.focus();
     }
   });
-  for (const input of [dateInput, noteInput]) {
+  for (const input of [dateInput, noteInput, countInput]) {
     input.addEventListener('focus', () => setTimeout(() => input.scrollIntoView({ block: 'nearest', behavior: 'smooth' }), 350));
   }
 
@@ -1085,15 +1312,39 @@ function openEditor(id = null) {
       dateInput.focus();
       return;
     }
-    const payload = { type: draft.type, method: draft.method, amount, date: dateInput.value, note: noteInput.value };
+    const inPlan = planMode();
+    const count = paymentCount();
+    if (inPlan && (!Number.isInteger(count) || count < 2 || count > store.MAX_PAYMENTS || toAgorot(amount) < count)) {
+      shake(countRow);
+      countInput.focus();
+      return;
+    }
+    let message;
     try {
-      if (isNew) {
-        const tx = store.addTransaction(payload);
-        state.flashId = tx.id;
-        saveUi({ lastMethod: draft.method });
-        requestPersistentStorage();
+      if (inPlan) {
+        const payload = { total: amount, count, firstDate: dateInput.value, method: draft.method, note: noteInput.value };
+        if (plan) {
+          store.updatePlan(plan.id, payload);
+          message = 'Installment plan saved';
+        } else {
+          const added = store.addPlan(payload);
+          state.flashId = added.id;
+          saveUi({ lastMethod: draft.method });
+          requestPersistentStorage();
+          message = `Plan added: ${count} payments of ${money(store.splitPayments(amount, count)[1])}`;
+        }
       } else {
-        store.updateTransaction(existing.id, payload);
+        const payload = { type: draft.type, method: draft.method, amount, date: dateInput.value, note: noteInput.value };
+        if (isNew) {
+          const tx = store.addTransaction(payload);
+          state.flashId = tx.id;
+          saveUi({ lastMethod: draft.method });
+          requestPersistentStorage();
+          message = `${draft.type === 'income' ? 'Income' : 'Expense'} of ${money(toAgorot(amount))} added`;
+        } else {
+          store.updateTransaction(existing.id, payload);
+          message = 'Changes saved';
+        }
       }
     } catch (err) {
       showError(err);
@@ -1101,13 +1352,11 @@ function openEditor(id = null) {
     }
     layer.close();
     haptic();
-    const what = draft.type === 'income' ? 'Income' : 'Expense';
-    toast(isNew ? `${what} of ${money(toAgorot(amount))} added` : 'Changes saved', { iconName: 'check', duration: 2500 });
+    toast(message, { iconName: 'check', duration: 2800 });
   });
 
   cancelButton.addEventListener('click', () => layer.close());
 
-  updateTitle();
   refreshAmount();
   syncChips();
 
@@ -1163,21 +1412,29 @@ function deleteWithUndo(id) {
   });
 }
 
+/** "62 transactions and 2 installment plans" */
+function dataDescription({ transactions, plans }) {
+  const parts = [plural(transactions.length, 'transaction')];
+  if (plans.length) parts.push(plural(plans.length, 'installment plan'));
+  return parts.join(' and ');
+}
+
+const hasData = (data) => data.transactions.length > 0 || data.plans.length > 0;
+
 async function deleteAll() {
-  const all = store.getAll();
-  if (!all.length) return;
+  const before = store.snapshot();
+  if (!hasData(before)) return;
   const choice = await alertDialog({
     title: 'Delete all data?',
-    message: `This removes all ${plural(all.length, 'transaction')} from this device. Export a backup first if you might need them later.`,
+    message: `This removes all ${dataDescription(before)} from this device. Export a backup first if you might need them later.`,
     actions: [
       { label: 'Cancel', role: 'cancel' },
       { label: 'Delete', value: 'delete', role: 'destructive' },
     ],
   });
   if (choice !== 'delete') return;
-  const before = [...all];
   try {
-    store.replaceAll([]);
+    store.restoreSnapshot({ transactions: [], plans: [] });
   } catch (err) {
     showError(err);
     return;
@@ -1188,7 +1445,7 @@ async function deleteAll() {
     duration: 7000,
     onAction: () => {
       try {
-        store.replaceAll(before);
+        store.restoreSnapshot(before);
       } catch (err) {
         showError(err);
       }
@@ -1198,7 +1455,7 @@ async function deleteAll() {
 
 async function exportBackup() {
   const backup = store.buildBackup();
-  if (!backup.transactions.length) {
+  if (!hasData(backup)) {
     await alertDialog({ title: 'Nothing to back up yet', message: 'Add a transaction first.', actions: [{ label: 'OK', role: 'cancel' }] });
     return;
   }
@@ -1257,14 +1514,14 @@ function setupImport() {
       });
       return;
     }
-    const current = store.getAll();
-    const count = plural(parsed.transactions.length, 'transaction');
+    const before = store.snapshot();
+    const count = dataDescription(parsed);
     const from = parsed.exportedAt && dateTime(parsed.exportedAt) ? `Backup from ${dateTime(parsed.exportedAt)}. ` : '';
     let mode = 'replace';
-    if (current.length) {
+    if (hasData(before)) {
       mode = await actionSheet({
         title: `Import ${count}?`,
-        message: `${from}You have ${plural(current.length, 'transaction')} on this device — replace them with the backup, or combine both?`,
+        message: `${from}You have ${dataDescription(before)} on this device — replace them with the backup, or combine both?`,
         actions: [
           { label: 'Replace all data', value: 'replace', role: 'destructive' },
           { label: 'Merge with current data', value: 'merge' },
@@ -1273,16 +1530,21 @@ function setupImport() {
       });
       if (!mode) return;
     }
-    const before = [...current];
     let message;
     try {
       if (mode === 'replace') {
-        store.replaceAll(parsed.transactions);
+        // Backups made before installments existed have no plans: keep the ones on this phone.
+        store.restoreSnapshot({ transactions: parsed.transactions, plans: parsed.hasPlans ? parsed.plans : before.plans });
         message = `Restored ${count}`;
       } else {
-        const result = store.mergeTransactions(parsed.transactions);
-        message = result.added || result.updated
-          ? `Added ${plural(result.added, 'transaction')}${result.updated ? `, updated ${result.updated}` : ''}`
+        const tx = store.mergeTransactions(parsed.transactions);
+        const plans = store.mergePlans(parsed.plans);
+        const added = [];
+        if (tx.added) added.push(plural(tx.added, 'transaction'));
+        if (plans.added) added.push(plural(plans.added, 'plan'));
+        const updated = tx.updated + plans.updated;
+        message = added.length || updated
+          ? `${added.length ? `Added ${added.join(' and ')}` : 'Nothing new'}${updated ? `, updated ${updated}` : ''}`
           : 'Everything was already here';
       }
     } catch (err) {
@@ -1296,7 +1558,7 @@ function setupImport() {
       duration: 7000,
       onAction: () => {
         try {
-          store.replaceAll(before);
+          store.restoreSnapshot(before);
         } catch (err) {
           showError(err);
         }
