@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#4338ca"/>
+      <stop offset="0.55" stop-color="#6d28d9"/>
+      <stop offset="1" stop-color="#a21caf"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.82" cy="0.12" r="0.7">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.34"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="body" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#ece9ff"/>
+    </linearGradient>
+  </defs>
+  <rect width="1024" height="1024" fill="url(#bg)"/>
+  <rect width="1024" height="1024" fill="url(#glow)"/>
+  <!-- card peeking out of the wallet -->
+  <rect x="300" y="236" width="400" height="230" rx="52" fill="#ffffff" fill-opacity="0.5" transform="rotate(-9 500 351)"/>
+  <!-- wallet -->
+  <rect x="222" y="336" width="580" height="420" rx="100" fill="url(#body)"/>
+  <!-- clasp -->
+  <rect x="590" y="468" width="212" height="156" rx="62" fill="#d9d3ff"/>
+  <circle cx="666" cy="546" r="30" fill="#6d28d9"/>
+</svg>

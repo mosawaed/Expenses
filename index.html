@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en" dir="ltr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Expenses</title>
+  <meta name="description" content="Track your income and expenses in shekels. Works offline, and your data stays on your device.">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#f2f2f7" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+
+  <!-- iPhone home screen app settings -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Expenses">
+  <meta name="format-detection" content="telephone=no">
+
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/favicon.svg" type="image/svg+xml">
+  <link rel="icon" href="icons/favicon-32.png" sizes="32x32" type="image/png">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="stylesheet" href="css/app.css">
+
+  <script>
+    // Apply the saved light/dark choice before the first paint to avoid a flash.
+    try {
+      var savedTheme = localStorage.getItem('expenses.theme');
+      if (savedTheme === 'light' || savedTheme === 'dark') document.documentElement.setAttribute('data-theme', savedTheme);
+    } catch (e) {}
+  </script>
+  <script type="module" src="js/app.js"></script>
+</head>
+<body>
+  <div id="app" class="app">
+    <main class="views">
+
+      <!-- Home -->
+      <section class="view" id="view-home" data-view="home" aria-labelledby="home-title">
+        <div class="nav-compact" aria-hidden="true"><span>Overview</span></div>
+        <header class="large-title">
+          <p class="eyebrow" id="today-label"></p>
+          <h1 id="home-title">Overview</h1>
+        </header>
+        <div class="content">
+          <div id="home-balance"></div>
+          <div id="home-notices"></div>
+          <section class="section" aria-labelledby="summary-title">
+            <div class="section-head">
+              <h2 id="summary-title">Monthly summary</h2>
+              <div id="home-month-nav"></div>
+            </div>
+            <div id="home-summary"></div>
+          </section>
+          <section class="section" aria-labelledby="recent-title">
+            <div class="section-head">
+              <h2 id="recent-title">Recent</h2>
+              <button type="button" class="link-btn" data-goto="activity">See all</button>
+            </div>
+            <div id="home-recent"></div>
+          </section>
+        </div>
+      </section>
+
+      <!-- Activity -->
+      <section class="view has-filters" id="view-activity" data-view="activity" aria-labelledby="activity-title" hidden>
+        <div class="nav-compact" aria-hidden="true"><span>Activity</span></div>
+        <header class="large-title">
+          <h1 id="activity-title">Activity</h1>
+        </header>
+        <div class="filter-bar" id="activity-filters"></div>
+        <div class="content">
+          <div id="activity-summary"></div>
+          <div id="activity-list"></div>
+        </div>
+      </section>
+
+      <!-- Insights -->
+      <section class="view has-filters" id="view-insights" data-view="insights" aria-labelledby="insights-title" hidden>
+        <div class="nav-compact" aria-hidden="true"><span>Insights</span></div>
+        <header class="large-title">
+          <h1 id="insights-title">Insights</h1>
+        </header>
+        <div class="filter-bar" id="insights-filters"></div>
+        <div class="content" id="insights-content"></div>
+      </section>
+
+      <!-- Settings -->
+      <section class="view" id="view-settings" data-view="settings" aria-labelledby="settings-title" hidden>
+        <div class="nav-compact" aria-hidden="true"><span>Settings</span></div>
+        <header class="large-title">
+          <h1 id="settings-title">Settings</h1>
+        </header>
+        <div class="content" id="settings-content"></div>
+      </section>
+    </main>
+
+    <nav class="tabbar" aria-label="Main">
+      <div class="tabbar-tabs" id="tabbar-tabs">
+        <span class="tab-indicator" aria-hidden="true"></span>
+        <button type="button" class="tab" data-tab="home" aria-current="page">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 10.5 12 3.5l8.5 7"/><path d="M5.5 9v10.5a1 1 0 0 0 1 1H10v-6h4v6h3.5a1 1 0 0 0 1-1V9"/></svg>
+          <span>Home</span>
+        </button>
+        <button type="button" class="tab" data-tab="activity">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6.5h11M9 12h11M9 17.5h11M4.5 6.5h.01M4.5 12h.01M4.5 17.5h.01"/></svg>
+          <span>Activity</span>
+        </button>
+        <button type="button" class="tab" data-tab="insights">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20.5h16"/><path d="M7 16.5V12M12 16.5V6.5M17 16.5V9.5"/></svg>
+          <span>Insights</span>
+        </button>
+        <button type="button" class="tab" data-tab="settings">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h9M17 7h3M4 12h3M11 12h9M4 17h11M19 17h1"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="17" r="2"/></svg>
+          <span>Settings</span>
+        </button>
+      </div>
+      <button type="button" class="fab" id="quick-add" aria-label="Add a transaction">
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+      </button>
+    </nav>
+  </div>
+
+  <div id="overlay-root"></div>
+  <div id="toast-root" class="toast-root" role="status" aria-live="polite"></div>
+
+  <!-- Helps the iPhone keyboard open right away when you tap + (see app.js) -->
+  <input id="focus-proxy" class="focus-proxy" type="text" inputmode="decimal" tabindex="-1" aria-hidden="true" autocomplete="off">
+  <input id="import-file" type="file" accept="application/json,.json,text/plain" hidden>
+
+  <noscript>
+    <p class="noscript">Expenses needs JavaScript to run. Please enable it in your browser settings.</p>
+  </noscript>
+</body>
+</html>

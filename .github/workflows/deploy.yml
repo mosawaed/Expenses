@@ -1,0 +1,50 @@
+# Publishes the app to GitHub Pages every time the main branch changes.
+# One-time setup: Settings → Pages → Source: "GitHub Actions" (see README.md).
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: # adds a "Run workflow" button on the Actions tab
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Never run two deploys at the same time.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Get the code
+        uses: actions/checkout@v6
+
+      - name: Prepare the site
+        run: |
+          mkdir _site
+          cp -r index.html manifest.webmanifest sw.js css js icons _site/
+          # Stamp this deploy with its commit id so installed apps notice the update.
+          build="${GITHUB_SHA::7}"
+          sed -i "s/__BUILD__/${build}/" _site/sw.js _site/js/version.js
+          grep -q "const BUILD = '${build}'" _site/sw.js
+          grep -q "const BUILD = '${build}'" _site/js/version.js
+
+      - name: Set up GitHub Pages
+        uses: actions/configure-pages@v6
+
+      - name: Upload the site
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: _site
+
+      - name: Publish
+        id: deployment
+        uses: actions/deploy-pages@v5
