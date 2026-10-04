@@ -673,3 +673,58 @@ export function createMethodSplit() {
 
   return { el, table, update };
 }
+
+// ---------------------------------------------------------------------------
+// Spending by category — one bar per category, biggest first. Each row shows
+// the name, amount and share as text, so color is never the only label.
+// ---------------------------------------------------------------------------
+
+export function createCategoryBreakdown({ onSelect, renderIcon }) {
+  const readout = h('div', { class: 'readout' });
+  const list = h('ul', { class: 'cat-bars' });
+  const el = h('div', { class: 'chart' }, readout, list);
+  const table = h('div', { class: 'chart-table' });
+
+  function update({ rows, periodLabel }) {
+    const total = rows.reduce((sum, r) => sum + r.amount, 0);
+    const max = rows.length ? rows[0].amount : 0;
+    readout.replaceChildren(
+      h('p', { class: 'readout-caption' }, periodLabel),
+      h('div', { class: 'readout-items' },
+        h('div', { class: 'readout-item' },
+          h('span', { class: 'readout-text' },
+            h('span', { class: 'readout-value' }, money(total)),
+            h('span', { class: 'readout-label' }, rows.length ? `spent across ${rows.length} ${rows.length === 1 ? 'category' : 'categories'}` : 'spent')))));
+    const grow = !prefersReducedMotion();
+    list.replaceChildren(...rows.map((row, i) => {
+      const share = total ? row.amount / total : 0;
+      const fill = h('span', { class: 'cat-bar-fill', style: { '--fill': grow ? '0' : (max ? row.amount / max : 0).toFixed(4) } });
+      fill.dataset.fill = (max ? row.amount / max : 0).toFixed(4);
+      return h('li', null,
+        h('button', {
+          type: 'button',
+          class: 'cat-bar-row',
+          style: { '--cat': `var(--cat-${row.category.color})`, '--i': i },
+          'aria-label': `${row.category.name}: ${money(row.amount)}, ${percent(share)} of spending, ${row.count} ${row.count === 1 ? 'expense' : 'expenses'}. Shows these transactions.`,
+          onClick: () => onSelect(row.category.id),
+        },
+        h('span', { class: 'cat-bubble', 'aria-hidden': 'true' }, renderIcon(row.category.icon)),
+        h('span', { class: 'cat-bar-main' },
+          h('span', { class: 'cat-bar-top' },
+            h('span', { class: 'cat-bar-name', dir: 'auto' }, row.category.name),
+            h('span', { class: 'cat-bar-amount' }, money(row.amount)),
+            h('span', { class: 'cat-bar-share' }, percent(share))),
+          h('span', { class: 'cat-bar-track', 'aria-hidden': 'true' }, fill))));
+    }));
+    if (!rows.length) list.append(h('li', { class: 'chart-empty-row' }, 'No spending in this period yet'));
+    if (grow) {
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        list.querySelectorAll('.cat-bar-fill').forEach((f) => f.style.setProperty('--fill', f.dataset.fill));
+      }));
+    }
+    table.replaceChildren(dataTable('Spending by category', ['Category', 'Spent', 'Share'],
+      rows.map((r) => [r.category.name, money(r.amount), percent(total ? r.amount / total : 0)])));
+  }
+
+  return { el, table, update };
+}
